@@ -31,20 +31,32 @@
 #include <signal.h>
 
 volatile int intr;
-volatile int reset;
-
+/*volatile int reset;*/
+int ch;                                                    /* znak abaecedy */ 
 
 /**
  * @brief   Funkce vykonana pri prijeti siganulu SIGUSR1 nmebo SIGUSR2.
  * @param   sig Cislo signalu.
  */
 void catcher(int sig) {
-   if(sig == SIGUSR2) {
-      reset = 1;
+   if(sig == SIGUSR2) {                                  /* prisel signal USR2 */
+      ch = (int)'A';                                     /* resetuji abecedu */
    }
-   else {
+   else {                                                /* prisel signal USR1 */
       intr = 1;
    }
+   return;
+}
+
+/**
+ * @brief   Posunese v abecede o jeden znak dale, Pripdane zacne od zacatku.
+ */   
+void inc(void) {
+   ch++;
+   if(ch > 'Z') {                                        /* jsme an konci abecedy */
+      ch = (int)'A';                                     /* pocatek abecedy */   
+   }
+   return;
 }
 
 int main(void)/*int argc, char *argv[])*/ {
@@ -53,78 +65,74 @@ int main(void)/*int argc, char *argv[])*/ {
    struct sigaction sigact;                               /* struktura pro definici cinnost signalu */
    sigset_t block;                                        /* maska */
    sigset_t empty_set;                                    /* prazdna maska */
-   char ch = 'A';
+   ch = (int)'A';
    intr = 0;
-   reset = 0;
    sigemptyset(&block);                                   /* vyprazdneni mnoziny signalu */
    sigaddset(&block, SIGUSR1);                            /* pridani signalu do mnoziny signalu */
    sigaddset(&block, SIGUSR2);                            /* pridani signalu do mnoziny signalu */
    sigprocmask(SIG_BLOCK, &block, NULL);                  /* nastaveni masky blokovanych signalu */
 
    sigact.sa_handler = catcher;                           /* nastaveni habdleru signalu na danou fci */
-   sigemptyset(&sigact.sa_mask);                          /* zablokovani signalu */
+/*   sigemptyset(&sigact.sa_mask);*/                          /* zablokovani signalu */
+   sigact.sa_mask = block;
    sigact.sa_flags = 0;
    if(sigaction(SIGUSR1, &sigact, NULL) == -1) {          /* prirazeni kace pri rpijmuti signalu SIGUSR1*/
       perror("CHYBA: pro SIGUSR1  ve fce sigaction()\n");
-      return 1;
+      return(1);
    }
    if(sigaction(SIGUSR2, &sigact, NULL) == -1) {          /* Prirazeni funkce pr prijmuti signalu SIGUSR2 */
       perror("CHYBA: pro SIGUSR2 ve fci sigaction()\n");
-      return 1;
+      return(1);
    }
-   sigprocmask(SIG_UNBLOCK, &block, NULL);                /* odblokovani signalu */
+/*   sigprocmask(SIG_UNBLOCK, &block, NULL); */               /* odblokovani signalu */
 
    pid = fork();                                          /* vytvoreni potomka */
    if(pid < 0) {                                          /* chyba */
       perror("CHYBA: Nepovedlo se vytvori potomka funkci fork()\n");
-      return -1;
+      return(-1);
    }
    else if (pid > 0) {                                    /* pracuje otec */
+      int c;
       printf("Parent (%d): '%c'\n", (int) getpid(), (char) ch);
-      ch++;                                               /* posunuti v abecede */
+      inc();                                              /* posunuti v abecede */
       sigemptyset(&empty_set);
-      kill(pid, SIGUSR1);                                 /* poslani signalu synovi */
+      if(kill(pid, SIGUSR1) == -1) {                      /* poslani signalu synovi */
+         perror("CHYBA:%s\n");
+         return -1;
+      }
       while(1) {
-         while (sigsuspend(&empty_set) == -1 && errno == EINTR) {
+         while( (sigsuspend(&empty_set) == -1) && errno == EINTR) {
             if(intr)
                break;
          }
          sigprocmask(SIG_UNBLOCK, &block, NULL);
          printf("Press enter...");
-         while(getchar() != '\n');                       /* cekam na entr */
+         while(( c = getchar()) != '\n');                 /* cekam na entr */
          sigprocmask(SIG_BLOCK, &block, NULL);
-         if(reset == 1) {                                /* kontrola prichodu signalu SIGUSR2 */
-            ch = 'A';
-            reset = 0;
-         }
          printf("Parent (%d): '%c'\n", (int) getpid(), (char) ch);
-         ch++;
-         if(ch == '[') {                                 /* kontrola konce abecedy */
-            ch = 'A';
-         }
+         inc();                                           /* posun v abecede */
          intr = 0;
-         kill(pid, SIGUSR1);
+         if(kill(pid, SIGUSR1) == -1) {
+            perror("CHYBA:%s\n");
+            return -1;
+         }
       }
    }
    else {                                                 /* syn - pid == 0 */
       sigemptyset(&empty_set);
       while(1) {
-         while (sigsuspend(&empty_set) == -1) {
+         while((sigsuspend(&empty_set) == -1) && errno == EINTR) {
             if(intr)
                break;
          }
-         sigprocmask(SIG_BLOCK, &block, NULL);
-         if(reset == 1) {                                /* kontrola zda prisel reset na znak */
-            ch = 'A';                                    /* nastavim na pocatecni hodnotu */
-            reset = 0;
-         }
+         sigprocmask(SIG_BLOCK, &block, NULL);           /* blokovani */
          printf("Child  (%d): '%c'\n", (int) getpid(), (char) ch);
-         ch++;                                           /* posun v abecede */
-         if(ch == '[') {                                 /* kontrola zda jiz nejsme na konci abecedy */
-            ch = 'A';                                    /* nastaveni pocatecni hodnoty */
-         }
+         inc();                                          /* inkrementace, posun v abecede */
          intr = 0;
-         kill(getppid(), SIGUSR1);                       /* zaslani signalu optci */
+         if(kill(getppid(), SIGUSR1) == -1) {            /* zaslani signalu otci */
+            perror("CHYBA:%s\n");
+            return -1;
+         }
       }
    }
 
